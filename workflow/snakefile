@@ -48,7 +48,7 @@ rule decompress_reference:
 
 rule bowtie2_build:
     input:
-        "resources/reference/reference.fna"
+        ref="resources/reference/reference.fna"
     output:
         multiext(
             "resources/reference/reference",
@@ -137,17 +137,28 @@ rule gatk_baserecalibrator:
     wrapper:
         "v7.1.0/bio/gatk/baserecalibrator"
 
+rule samtools_faidx:
+    input:
+        "resources/reference/reference.fna",
+    output:
+        "resources/reference/reference.fna.fai"
+    log:
+        "logs/faidx/reference.log"
+    wrapper:
+        "v7.1.0/bio/samtools/faidx"
+
 rule haplotype_caller_gvcf:
     input:
         bam="results/bowtie2/{sample}.bam",
-        ref="resources/reference/reference.fna"
+        ref="resources/reference/reference.fna",
+        fai="resources/reference/reference.fna.fai"
     output:
         gvcf="results/haplotypecaller/{sample}.gvcf.gz"
     log:
         "logs/haplotypecaller/{sample}.log"
     params:
-        extra="",  # optional
-        java_opts="",  # optional
+        extra="",
+        java_opts=""
     threads: 4
     resources:
         mem_mb=1024,
