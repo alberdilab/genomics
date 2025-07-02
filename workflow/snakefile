@@ -3,6 +3,16 @@ from pathlib import Path
 # Detect reads
 SAMPLES = sorted({f.stem.rsplit("_", 1)[0] for f in Path("resources/reads").glob("*_1.fq.gz")})
 
+# Detect reference genome
+ref_hits = sorted(Path("resources/reference").glob("*.fna.gz"))
+
+if not ref_hits:
+    sys.exit("❌  No .fna.gz reference found in resources/reference")
+if len(ref_hits) > 1:
+    sys.exit(f"❌  More than one .fna.gz reference found: {', '.join(map(str, ref_hits))}")
+
+REF_FASTA_GZ = ref_hits[0]
+
 # Generate output
 rule all:
     input:
@@ -19,15 +29,8 @@ rule fastp:
     log:
         "logs/fastp/{sample}.log"
     params:
-        adapters=" --adapter_sequence AGATCGGAAGAGCACACGTCTGAACTCCAGTCA \
-            --adapter_sequence_r2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT",
-        extra="--trim_poly_g \
-            --trim_poly_g \
-            --trim_poly_x \
-            --low_complexity_filter \
-            --n_base_limit 5 \
-            --qualified_quality_phred 20 \
-            --length_required 60"
+        adapters="--adapter_sequence AGATCGGAAGAGCACACGTCTGAACTCCAGTCA --adapter_sequence_r2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT",
+        extra="--trim_poly_g --trim_poly_g --trim_poly_x --low_complexity_filter --n_base_limit 5 --qualified_quality_phred 20 --length_required 60"
     threads: 4
     resources:
         mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 5) * 2 ** (attempt - 1)),
@@ -35,12 +38,20 @@ rule fastp:
     wrapper:
         "v7.1.0/bio/fastp"
 
+rule decompress_reference:
+    input:
+        REF_FASTA_GZ
+    output:
+        "resources/reference/reference.fna"
+    shell:
+        "gunzip -c {input} > {output}"
+
 rule bowtie2_build:
     input:
-        "resources/reference/{reference}.fna"
+        "resources/reference/reference.fna"
     output:
         multiext(
-            "resources/reference/{reference}",
+            "resources/reference/reference",
             ".1.bt2",
             ".2.bt2",
             ".3.bt2",
@@ -59,9 +70,9 @@ rule bowtie2_build:
 
 rule create_dict:
     input:
-        "resources/reference/{reference}.fna"
+        "resources/reference/reference.fna"
     output:
-        "resources/reference/{reference}.dict"
+        "resources/reference/reference.dict"
     log:
         "logs/picard/create_dict.log"
     threads: 1
@@ -73,9 +84,9 @@ rule create_dict:
 
 rule bowtie2:
     input:
-        sample=["results/fastp/{sample}_1.fq.gz", "rresults/fastp/{sample}_2.fq.gz"],
+        sample=["results/fastp/{sample}_1.fq.gz", "results/fastp/{sample}_2.fq.gz"],
         idx=multiext(
-            "resources/{reference}",
+            "resources/reference/reference",
             ".1.bt2",
             ".2.bt2",
             ".3.bt2",
@@ -91,7 +102,6 @@ rule bowtie2:
     resources:
         mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 5) * 2 ** (attempt - 1)),
         runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
-    message: "Mapping {wildcards.sample} against reference genome..."
     wrapper:
         "v7.1.0/bio/bowtie2/align"
 
@@ -115,10 +125,10 @@ rule picard:
 rule gatk_baserecalibrator:
     input:
         bam="results/bowtie2/{sample}.bam",
-        ref="resources/reference/{reference}.fna",
-        dict="resources/reference/{reference}.dict"
+        ref="resources/reference/reference.fna",
+        dict="resources/reference/reference.dict"
     output:
-        recal_table="resources/recal/{reference}.grp",
+        recal_table="resources/recal/{sample}.grp",
     log:
         "logs/baserecalibrator/{sample}.log",
     resources:
@@ -130,7 +140,7 @@ rule gatk_baserecalibrator:
 rule haplotype_caller_gvcf:
     input:
         bam="results/bowtie2/{sample}.bam",
-        ref="resources/reference/{reference}.fna"
+        ref="resources/reference/reference.fna"
     output:
         gvcf="results/haplotypecaller/{sample}.gvcf.gz"
     log:
@@ -147,12 +157,14 @@ rule haplotype_caller_gvcf:
 
 rule combine_gvcfs:
     input:
-        gvcfs=expand("results/haplotypecaller/{sample}.gvcf.gz", sample=SAMPLES),
-        ref="resources/reference/{reference}.fna"
+        gvcfs = lambda wc: expand(
+            "results/haplotypecaller/{sample}.gvcf.gz",
+            sample = SAMPLES),
+        ref="resources/reference/reference.fna"
     output:
         gvcf="results/genotypes/all.vcf.gz"
     log:
-        "logs/gcombinegvcfs/combinegvcfs.log"
+        "logs/gcombinegvcfs/gcombinegvcfs.log"
     resources:
         mem_mb=16 * 1024,
         runtime=24 * 60
