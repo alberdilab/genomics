@@ -1,2 +1,7 @@
-# genomics
-Snakemake pipeline for genomic analyses
+# Genotyping pipeline
+
+Snakemake pipeline for genotyping
+
+```
+"snakemake --workflow-profile slurm"
+```

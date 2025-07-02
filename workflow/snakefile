@@ -1,0 +1,160 @@
+from pathlib import Path
+
+# Detect reads
+SAMPLES = sorted({f.stem.rsplit("_", 1)[0] for f in Path("resources/reads").glob("*_1.fq.gz")})
+
+# Generate output
+rule all:
+    input:
+        "results/genotypes/all.vcf.gz"
+
+# Rules
+rule fastp:
+    input:
+        sample=["resources/reads/{sample}_1.fq.gz", "resources/reads/{sample}_2.fq.gz"]
+    output:
+        trimmed=["results/fastp/{sample}_1.fq.gz", "results/fastp/{sample}_2.fq.gz"],
+        html="results/fastp/{sample}.html",
+        json="results/fastp/{sample}.json"
+    log:
+        "logs/fastp/{sample}.log"
+    params:
+        adapters=" --adapter_sequence AGATCGGAAGAGCACACGTCTGAACTCCAGTCA \
+            --adapter_sequence_r2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT",
+        extra="--trim_poly_g \
+            --trim_poly_g \
+            --trim_poly_x \
+            --low_complexity_filter \
+            --n_base_limit 5 \
+            --qualified_quality_phred 20 \
+            --length_required 60"
+    threads: 4
+    resources:
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 5) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 1024 * 3) * 2 ** (attempt - 1))
+    wrapper:
+        "v7.1.0/bio/fastp"
+
+rule bowtie2_build:
+    input:
+        "resources/reference/{reference}.fna"
+    output:
+        multiext(
+            "resources/reference/{reference}",
+            ".1.bt2",
+            ".2.bt2",
+            ".3.bt2",
+            ".4.bt2",
+            ".rev.1.bt2",
+            ".rev.2.bt2",
+        )
+    log:
+        "logs/bowtie2_build/bowtie2_build.log"
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
+    wrapper:
+        "v7.1.0/bio/bowtie2/build"
+
+rule create_dict:
+    input:
+        "resources/reference/{reference}.fna"
+    output:
+        "resources/reference/{reference}.dict"
+    log:
+        "logs/picard/create_dict.log"
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
+    wrapper:
+        "v7.1.0/bio/picard/createsequencedictionary"
+
+rule bowtie2:
+    input:
+        sample=["results/fastp/{sample}_1.fq.gz", "rresults/fastp/{sample}_2.fq.gz"],
+        idx=multiext(
+            "resources/{reference}",
+            ".1.bt2",
+            ".2.bt2",
+            ".3.bt2",
+            ".4.bt2",
+            ".rev.1.bt2",
+            ".rev.2.bt2",
+        )
+    output:
+        "results/bowtie2/{sample}.bam"
+    log:
+        "logs/bowtie2/{sample}.log"
+    threads: 16
+    resources:
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 5) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
+    message: "Mapping {wildcards.sample} against reference genome..."
+    wrapper:
+        "v7.1.0/bio/bowtie2/align"
+
+rule picard:
+    input:
+        "results/bowtie2/{sample}.bam"
+    output:
+        bam="results/picard/{sample}.bam",
+        metrics="results/picard/{sample}.tsv"
+    log:
+        "logs/picard/{sample}.log"
+    params:
+        extra="--REMOVE_DUPLICATES true"
+    threads: 24
+    resources:
+        mem_mb=8 * 1024,
+        runtime=6 * 60
+    wrapper:
+        "v7.1.0/bio/picard/markduplicates"
+
+rule gatk_baserecalibrator:
+    input:
+        bam="results/bowtie2/{sample}.bam",
+        ref="resources/reference/{reference}.fna",
+        dict="resources/reference/{reference}.dict"
+    output:
+        recal_table="resources/recal/{reference}.grp",
+    log:
+        "logs/baserecalibrator/{sample}.log",
+    resources:
+        mem_mb=1024,
+        runtime=6 * 60
+    wrapper:
+        "v7.1.0/bio/gatk/baserecalibrator"
+
+rule haplotype_caller_gvcf:
+    input:
+        bam="results/bowtie2/{sample}.bam",
+        ref="resources/reference/{reference}.fna"
+    output:
+        gvcf="results/haplotypecaller/{sample}.gvcf.gz"
+    log:
+        "logs/haplotypecaller/{sample}.log"
+    params:
+        extra="",  # optional
+        java_opts="",  # optional
+    threads: 4
+    resources:
+        mem_mb=1024,
+        runtime=6 * 60
+    wrapper:
+        "v7.1.0/bio/gatk/haplotypecaller"
+
+rule combine_gvcfs:
+    input:
+        gvcfs=expand("results/haplotypecaller/{sample}.gvcf.gz", sample=SAMPLES),
+        ref="resources/reference/{reference}.fna"
+    output:
+        gvcf="results/genotypes/all.vcf.gz"
+    log:
+        "logs/gcombinegvcfs/combinegvcfs.log"
+    resources:
+        mem_mb=16 * 1024,
+        runtime=24 * 60
+    wrapper:
+        "v5.2.1/bio/gatk/combinegvcfs"
