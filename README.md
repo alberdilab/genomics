@@ -8,7 +8,7 @@ Clone this repository and rename the main directory as wished. Replace [project_
 
 ```
 screen -S [project_name]
-git clone https://github.com/alberdilab/genomics
+git clone https://github.com/alberdilab/genotyping
 mv genomics [project_name]
 cd [project_name]
 ```
@@ -23,8 +23,8 @@ git clone --depth 1 --branch v7.2.0 https://github.com/snakemake/snakemake-wrapp
 
 Prepare sequencing reads and reference genome.
 
-**Reads**: add sequencing reads to the resources/reads directory.
-**Reference genome**: add the reference genome to the resources/reference directory.
+- **Reads**: add sequencing reads to the resources/reads directory.
+- **Reference genome**: add the reference genome to the resources/reference directory.
 
 ## Launch pipeline
 
