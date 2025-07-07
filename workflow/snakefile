@@ -43,6 +43,8 @@ rule decompress_reference:
         REF_FASTA_GZ
     output:
         "resources/reference/reference.fna"
+    threads: 1
+    localrule: True
     shell:
         "gunzip -c {input} > {output}"
 
@@ -114,9 +116,10 @@ rule replace_rg:
         "logs/replace_rg/{sample}.log",
     params:
         extra="--RGLB lib1 --RGPL illumina --RGPU {sample} --RGSM {sample}"
+    threads: 1
     resources:
-        mem_mb=1024,
-        runtime=6 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/picard/addorreplacereadgroups"
 
@@ -131,8 +134,8 @@ rule samtools_sort:
         extra="-m 64G"
     threads: 1
     resources:
-        mem_mb=64 * 1024,
-        runtime=6 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/samtools/sort"
 
@@ -146,10 +149,10 @@ rule picard:
         "logs/picard/{sample}.log"
     params:
         extra="--REMOVE_DUPLICATES true"
-    threads: 24
+    threads: 8
     resources:
-        mem_mb=8 * 1024,
-        runtime=6 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/picard/markduplicates"
 
@@ -160,7 +163,10 @@ rule samtools_index:
         "results/picard/{sample}.bai"
     log:
         "logs/samtools_index/{sample}.log",
-    threads: 4
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/samtools/index"
 
@@ -171,6 +177,10 @@ rule samtools_faidx:
         "resources/reference/reference.fna.fai"
     log:
         "logs/faidx/reference.log"
+    threads: 1
+    resources:
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/samtools/faidx"
 
@@ -182,8 +192,8 @@ checkpoint create_regions:
     log:
         "logs/regions/regions.log"
     resources:
-        mem_mb=8 * 1024,
-        runtime=1 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 5) * 2 ** (attempt - 1)),
+        runtime=60
     conda:
         "envs/seqkit.yml"
     shell:
@@ -212,8 +222,8 @@ rule bcftools:
     log:
         "logs/bcftools/{region}.log"
     resources:
-        mem_mb=64 * 1024,
-        runtime=24 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     conda:
         "envs/bcftools.yml"
     shell:
@@ -245,8 +255,8 @@ rule bcftools_concat:
         extra=""
     threads: 4
     resources:
-        mem_mb=64 * 1024,
-        runtime=6 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/bcftools/concat"
 
@@ -258,8 +268,8 @@ rule IndexFeatureFile:
     log:
         "logs/bcftools/IndexFeatureFile.log"
     resources:
-        mem_mb=64 * 1024,
-        runtime=24 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     conda:
         "envs/gatk.yml"
     shell:
@@ -279,8 +289,8 @@ rule gatk_baserecalibrator:
     log:
         "logs/baserecalibrator/{sample}.log",
     resources:
-        mem_mb=8 * 1024,
-        runtime=24 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/gatk/baserecalibrator"
 
@@ -299,8 +309,8 @@ rule gatk_applybqsr:
         java_opts="",  # optional
         embed_ref=True,  # embed the reference in cram output
     resources:
-        mem_mb=8 * 1024,
-        runtime=24 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/gatk/applybqsr"
 
@@ -319,8 +329,8 @@ rule haplotype_caller_gvcf:
         java_opts=""
     threads: 4
     resources:
-        mem_mb=8 * 1024,
-        runtime=24 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/gatk/haplotypecaller"
 
@@ -335,7 +345,7 @@ rule combine_gvcfs:
     log:
         "logs/gcombinegvcfs/gcombinegvcfs.log"
     resources:
-        mem_mb=16 * 1024,
-        runtime=24 * 60
+        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/gatk/combinegvcfs"
