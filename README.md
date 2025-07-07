@@ -9,6 +9,9 @@ screen -S [project_name]
 git clone https://github.com/alberdilab/genomics
 mv genomics [project_name]
 cd [project_name]
+
+# Download wrappers to avoid connection issues
+git clone https://github.com/snakemake/snakemake-wrappers.git  workflow/wrappers
 ```
 *Replace [project_name] by an actual project name
 

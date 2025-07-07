@@ -36,7 +36,7 @@ rule fastp:
         mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 5) * 2 ** (attempt - 1)),
         runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 1024 * 3) * 2 ** (attempt - 1))
     wrapper:
-        "v7.1.0/bio/fastp"
+        "v7.2.0/bio/fastp"
 
 rule decompress_reference:
     input:
@@ -66,7 +66,7 @@ rule bowtie2_build:
         mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
         runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
-        "v7.1.0/bio/bowtie2/build"
+        "v7.2.0/bio/bowtie2/build"
 
 rule create_dict:
     input:
@@ -80,7 +80,7 @@ rule create_dict:
         mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
         runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
-        "v7.1.0/bio/picard/createsequencedictionary"
+        "v7.2.0/bio/picard/createsequencedictionary"
 
 rule bowtie2:
     input:
@@ -103,11 +103,42 @@ rule bowtie2:
         mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 5) * 2 ** (attempt - 1)),
         runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
-        "v7.1.0/bio/bowtie2/align"
+        "v7.2.0/bio/bowtie2/align"
+
+rule replace_rg:
+    input:
+        "results/bowtie2/{sample}.bam"
+    output:
+        "results/replace_rg/{sample}.bam"
+    log:
+        "logs/replace_rg/{sample}.log",
+    params:
+        extra="--RGLB lib1 --RGPL illumina --RGPU {sample} --RGSM {sample}"
+    resources:
+        mem_mb=1024,
+        runtime=6 * 60
+    wrapper:
+        "v7.2.0/bio/picard/addorreplacereadgroups"
+
+rule samtools_sort:
+    input:
+        "results/replace_rg/{sample}.bam",
+    output:
+        "results/sorted/{sample}.bam",
+    log:
+        "logs/sort/{sample}.log",
+    params:
+        extra="-m 64G"
+    threads: 1
+    resources:
+        mem_mb=64 * 1024,
+        runtime=6 * 60
+    wrapper:
+        "v7.2.0/bio/samtools/sort"
 
 rule picard:
     input:
-        "results/bowtie2/{sample}.bam"
+        bams="results/sorted/{sample}.bam"
     output:
         bam="results/picard/{sample}.bam",
         metrics="results/picard/{sample}.tsv"
@@ -120,22 +151,18 @@ rule picard:
         mem_mb=8 * 1024,
         runtime=6 * 60
     wrapper:
-        "v7.1.0/bio/picard/markduplicates"
+        "v7.2.0/bio/picard/markduplicates"
 
-rule gatk_baserecalibrator:
+rule samtools_index:
     input:
-        bam="results/bowtie2/{sample}.bam",
-        ref="resources/reference/reference.fna",
-        dict="resources/reference/reference.dict"
+        "results/picard/{sample}.bam"
     output:
-        recal_table="resources/recal/{sample}.grp",
+        "results/picard/{sample}.bai"
     log:
-        "logs/baserecalibrator/{sample}.log",
-    resources:
-        mem_mb=1024,
-        runtime=6 * 60
+        "logs/samtools_index/{sample}.log",
+    threads: 4
     wrapper:
-        "v7.1.0/bio/gatk/baserecalibrator"
+        "v7.2.0/bio/samtools/index"
 
 rule samtools_faidx:
     input:
@@ -145,13 +172,144 @@ rule samtools_faidx:
     log:
         "logs/faidx/reference.log"
     wrapper:
-        "v7.1.0/bio/samtools/faidx"
+        "v7.2.0/bio/samtools/faidx"
+
+checkpoint create_regions:
+    input:
+        "resources/reference/reference.fna"
+    output:
+        "resources/reference/reference.bed"
+    log:
+        "logs/regions/regions.log"
+    resources:
+        mem_mb=8 * 1024,
+        runtime=1 * 60
+    conda:
+        "envs/seqkit.yml"
+    shell:
+        """
+        seqkit fx2tab -l -n {input} \
+          | awk '{{print $1"\t0\t"$2"\t"$1}}' \
+          > {output}
+        """
+
+def region_list(wildcards):
+    bed = checkpoints.create_regions.get().output[0]
+    regions = []
+    with open(bed) as fh:
+        for chrom, start, end, *_ in map(str.split, fh):
+            regions.append(f"{chrom}")
+    return regions
+
+rule bcftools:
+    input:
+        bam=expand("results/picard/{sample}.bam", sample=SAMPLES),
+        bai=expand("results/picard/{sample}.bai", sample=SAMPLES),
+        fasta="resources/reference/reference.fna",
+        fai="resources/reference/reference.fna.fai"
+    output:
+        "resources/reference/regions/{region}.bcf"
+    log:
+        "logs/bcftools/{region}.log"
+    resources:
+        mem_mb=64 * 1024,
+        runtime=24 * 60
+    conda:
+        "envs/bcftools.yml"
+    shell:
+        """
+        ( bcftools mpileup \
+            --fasta-ref {input.fasta} \
+            --output-type u \
+            --region {wildcards.region} \
+            {input.bam} \
+        | bcftools call \
+            --multiallelic-caller \
+            --variants-only \
+            --output-type u \
+        | bcftools filter \
+            --include 'QUAL > 30' \
+            --output-type b \
+            --output {output} \
+        ) 2> {log}
+        """
+
+rule bcftools_concat:
+    input:
+        calls=expand("resources/reference/regions/{region}.bcf",region=region_list)
+    output:
+        "resources/reference/reference.vcf.gz"
+    log:
+        "logs/bcftools_concat/bcftools_concat.log",
+    params:
+        extra=""
+    threads: 4
+    resources:
+        mem_mb=64 * 1024,
+        runtime=6 * 60
+    wrapper:
+        "v7.2.0/bio/bcftools/concat"
+
+rule IndexFeatureFile:
+    input:
+        "resources/reference/reference.vcf.gz"
+    output:
+        "resources/reference/reference.vcf.gz.tbi"
+    log:
+        "logs/bcftools/IndexFeatureFile.log"
+    resources:
+        mem_mb=64 * 1024,
+        runtime=24 * 60
+    conda:
+        "envs/gatk.yml"
+    shell:
+        """
+        gatk IndexFeatureFile --input {input}
+        """
+
+rule gatk_baserecalibrator:
+    input:
+        bam="results/picard/{sample}.bam",
+        ref="resources/reference/reference.fna",
+        dict="resources/reference/reference.dict",
+        known="resources/reference/reference.vcf.gz",
+        index="resources/reference/reference.vcf.gz.tbi"
+    output:
+        recal_table="results/recal/{sample}.grp",
+    log:
+        "logs/baserecalibrator/{sample}.log",
+    resources:
+        mem_mb=8 * 1024,
+        runtime=24 * 60
+    wrapper:
+        "v7.2.0/bio/gatk/baserecalibrator"
+
+rule gatk_applybqsr:
+    input:
+        bam="results/picard/{sample}.bam",
+        ref="resources/reference/reference.fna",
+        dict="resources/reference/reference.dict",
+        recal_table="results/recal/{sample}.grp"
+    output:
+        bam="results/recal/{sample}.bam"
+    log:
+        "logs/gatk_applybqsr/{sample}.log",
+    params:
+        extra="",  # optional
+        java_opts="",  # optional
+        embed_ref=True,  # embed the reference in cram output
+    resources:
+        mem_mb=8 * 1024,
+        runtime=24 * 60
+    wrapper:
+        "v7.2.0/bio/gatk/applybqsr"
 
 rule haplotype_caller_gvcf:
     input:
-        bam="results/bowtie2/{sample}.bam",
+        bam="results/recal/{sample}.bam",
         ref="resources/reference/reference.fna",
-        fai="resources/reference/reference.fna.fai"
+        fai="resources/reference/reference.fna.fai",
+        dict="resources/reference/reference.dict"
     output:
         gvcf="results/haplotypecaller/{sample}.gvcf.gz"
     log:
@@ -161,10 +319,10 @@ rule haplotype_caller_gvcf:
         java_opts=""
     threads: 4
     resources:
-        mem_mb=1024,
-        runtime=6 * 60
+        mem_mb=8 * 1024,
+        runtime=24 * 60
     wrapper:
-        "v7.1.0/bio/gatk/haplotypecaller"
+        "v7.2.0/bio/gatk/haplotypecaller"
 
 rule combine_gvcfs:
     input:
@@ -180,4 +338,4 @@ rule combine_gvcfs:
         mem_mb=16 * 1024,
         runtime=24 * 60
     wrapper:
-        "v5.2.1/bio/gatk/combinegvcfs"
+        "v7.2.0/bio/gatk/combinegvcfs"
