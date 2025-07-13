@@ -222,8 +222,9 @@ rule bcftools:
     log:
         "logs/bcftools/{region}.log"
     resources:
-        mem_mb=lambda wildcards, input, attempt: max(8*1024, int(input.size_mb * 10) * 2 ** (attempt - 1)),
-        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
+        mem_mb=lambda wildcards, input, attempt: 16 * 1024 * 2 ** (attempt - 1),
+        runtime=lambda wildcards, input, attempt: 6 * 60 * 2 ** (attempt - 1)
+
     conda:
         "envs/bcftools.yml"
     shell:
@@ -341,7 +342,7 @@ rule combine_gvcfs:
             sample = SAMPLES),
         ref="resources/reference/reference.fna"
     output:
-        gvcf="results/genotypes/all.vcf.gz"
+        gvcf="results/haplotypecaller/all.vcf.gz"
     log:
         "logs/gcombinegvcfs/gcombinegvcfs.log"
     resources:
@@ -349,3 +350,17 @@ rule combine_gvcfs:
         runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 20) * 2 ** (attempt - 1))
     wrapper:
         "v7.2.0/bio/gatk/combinegvcfs"
+
+rule genotype_gvcfs:
+    input:
+        gvcf="results/haplotypecaller/all.vcf.gz",
+        ref="resources/reference/reference.fna"
+    output:
+        vcf="results/genotypes/all.vcf.gz"
+    log:
+        "logs/genotype/genotype.log"
+    resources:
+        mem_mb=lambda wildcards, input, attempt: max(64*1024, int(input.size_mb) * 2 ** (attempt - 1)),
+        runtime=lambda wildcards, input, attempt: max(15, int(input.size_mb / 50) * 2 ** (attempt - 1))
+    wrapper:
+        "v7.2.0/bio/gatk/genotypegvcfs"
